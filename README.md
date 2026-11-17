@@ -229,8 +229,8 @@ plotstyle ps:
     marker: dot
     linecolor: blue
     markercolor: "#f92200"
-    x: [-1, 1]
-    y: [-2, 2]
+    xrange: [-1, 1]
+    yrange: [-2, 2]
 
 # This will plot ps
 plot(f, ps)
@@ -261,7 +261,7 @@ A `plotstyle NAME:` line starts a style. Its options follow on indented lines, o
 | `markersize`  | a size in `px` or `pt` | `markersize: 8 px` |
 | `linecolor`   | a color name or `"#rrggbb"` | `linecolor: blue` |
 | `markercolor` | a color name or `"#rrggbb"` | `markercolor: "#f92200"` |
-| `x`, `y`      | axis limits `[min, max]`; expressions like `[-pi, pi]` work | `x: [-1, 1]` |
+| `xrange`, `yrange` | axis limits `[min, max]`; expressions like `[-pi, pi]` work | `xrange: [-1, 1]` |
 | `title`, `xlabel`, `ylabel` | text | `title: cos(x)` |
 | `grid`        | `on` or `off` | `grid: on` |
 

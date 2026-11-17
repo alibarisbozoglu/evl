@@ -7,8 +7,8 @@ plotstyle ps:
     marker: dot
     linecolor: blue
     markercolor: "#f92200"
-    x: [-1, 1]
-    y: [-2, 2]
+    xrange: [-1, 1]
+    yrange: [-2, 2]
 
 # This will plot ps
 plot(f, ps)

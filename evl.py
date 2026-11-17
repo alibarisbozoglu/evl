@@ -90,7 +90,7 @@ MARKERS = {
 }
 STYLE_KEYS = (
     "linestyle", "linewidth", "marker", "markersize", "linecolor",
-    "markercolor", "x", "y", "title", "xlabel", "ylabel", "grid",
+    "markercolor", "xrange", "yrange", "title", "xlabel", "ylabel", "grid",
 )
 
 
@@ -372,7 +372,7 @@ class Evaluator:
             if colors and not colors.is_color_like(value):
                 raise EvlError(f"unknown color '{value}' (use a name like blue or \"#rrggbb\")")
             return value
-        if key in ("x", "y"):
+        if key in ("xrange", "yrange"):
             limits = self.eval(ast.parse(preprocess_expression(value), mode="eval").body)
             if not isinstance(limits, Vector) or len(limits.values) != 2:
                 raise EvlError(f"expected [min, max], got '{value}'")
@@ -424,10 +424,10 @@ class Evaluator:
             xs = vector.domain if vector.domain is not None else list(range(len(vector.values)))
             ax.plot(xs, vector.values, **kwargs)
 
-        if "x" in options:
-            ax.set_xlim(*options["x"])
-        if "y" in options:
-            ax.set_ylim(*options["y"])
+        if "xrange" in options:
+            ax.set_xlim(*options["xrange"])
+        if "yrange" in options:
+            ax.set_ylim(*options["yrange"])
         for key, setter in (("title", ax.set_title), ("xlabel", ax.set_xlabel),
                             ("ylabel", ax.set_ylabel)):
             if key in options:
