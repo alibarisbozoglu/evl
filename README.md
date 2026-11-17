@@ -9,7 +9,7 @@ ans: 10
 
 ## Installation
 
-EVL needs Python 3.9 or newer. Make the script executable and link it into a folder on your `PATH`:
+EVL needs Python 3.9 or newer. Plotting also needs [matplotlib](https://matplotlib.org/) (`pip install --user matplotlib`); everything else works without it. Make the script executable and link it into a folder on your `PATH`:
 
 ```sh
 chmod +x evl.py
@@ -49,6 +49,7 @@ Run `evl` with no arguments to start a session, then type one statement per line
 - A line **without** a trailing `;` runs everything saved so far and prints the answer.
 - Variables are kept for the rest of the session, so you can keep calculating.
 - Press Enter on an **empty line** (or Ctrl-D) to quit.
+- A [`plotstyle`](#plotting) block is the exception: an empty line just ends the block, and the session continues.
 
 ```
 $ evl
@@ -87,7 +88,7 @@ $ evl -f circle.evl
 ans: 28.27
 ```
 
-In a file, put one statement per line; a trailing `;` is optional. Blank lines and lines starting with `#` are ignored. EVL runs the whole file and prints the value of the last statement. A syntax error reports its line number, e.g. `error: syntax error on line 2: invalid syntax`.
+In a file, put one statement per line; a trailing `;` is optional. Blank lines and lines starting with `#` are ignored. EVL runs the whole file and prints the value of the last statement. Errors report their line number, e.g. `error: syntax error on line 2: invalid syntax` or `error: line 5: division by zero`.
 
 ## Language
 
@@ -183,6 +184,94 @@ ans: 1111
 - Negative numbers keep their sign: `dec2bin(-5)` gives `-101`.
 
 You can store a converted result and convert it again: `h = dec2hex(171); hex2bin(h)` gives `10101011`. When the argument of a `bin2…`/`oct2…`/`hex2…` function is a single word, EVL first reads it as digits and only falls back to a variable if that fails. So `hex2dec(cafe)` always means the hex number `CAFE`, even if you have a variable called `cafe`.
+
+### Ranges and lists
+
+`range(start, step, end)` makes a list of numbers from `start` to `end`, going up by `step`. The `end` value is included. `[start:step:end]` is a shorter way to write the same thing, and `[start:end]` uses a step of 1:
+
+```
+$ evl 'range(-1, 0.1, 1)'
+ans: [-1, -0.9, -0.8, -0.7, -0.6, -0.5, -0.4, -0.3, -0.2, -0.1, 0, 0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9, 1]
+
+$ evl '[0:5]'
+ans: [0, 1, 2, 3, 4, 5]
+```
+
+A step can be negative (`[10:-2:0]`). You can also write a list out by hand: `[1, 2, 3]`.
+
+Arithmetic and functions work on every element:
+
+```
+$ evl 'x = [0:0.5:2]; x^2 + 1'
+ans: [1, 1.25, 2, 3.25, 5]
+
+$ evl 'round(sin([0:0.5:1]), 3)'
+ans: [0, 0.479, 0.841]
+```
+
+Combining two lists works element by element, and they must have the same length.
+
+These functions turn a list into a single number: `sum`, `len`, `mean`, `min` and `max`. For example, `sum([1:100])` gives `5050`.
+
+Answers with more than 50 values are shortened to the first and last 10.
+
+## Plotting
+
+`plot` opens a window with a graph. Here's a complete example (`test.evl`):
+
+```
+x = range(-1, 0.1, 1)
+f = cos(x)
+
+plotstyle ps:
+    linestyle: solid
+    linewidth: 2 px
+    marker: dot
+    linecolor: blue
+    markercolor: "#f92200"
+    x: [-1, 1]
+    y: [-2, 2]
+
+# This will plot ps
+plot(f, ps)
+```
+
+```sh
+evl -f test.evl
+```
+
+### plot
+
+`plot(f)` draws `f` against the range it was calculated from. Above, `f = cos(x)`, so the graph shows `cos(x)` over `x` from -1 to 1. A list with no range behind it, like `[3, 1, 4]`, is drawn against its position (0, 1, 2, ...).
+
+- `plot(f, g)` draws several lines in one window.
+- `plot(f, ps)` uses the plotstyle `ps`. The style always goes last.
+- Each `plot` call opens its own window. EVL waits until you close all of them before it exits.
+- In multiline mode, the window opens straight away and you can keep typing.
+
+### plotstyle
+
+A `plotstyle NAME:` line starts a style. Its options follow on indented lines, one `option: value` per line, and the block ends at the next line that isn't indented. Every option is optional.
+
+| Option        | Values | Example |
+|---------------|--------|---------|
+| `linestyle`   | `solid`, `dashed`, `dotted`, `dashdot`, `none` | `linestyle: dashed` |
+| `linewidth`   | a size in `px` or `pt` (no unit means px) | `linewidth: 2 px` |
+| `marker`      | `none`, `dot`, `circle`, `square`, `triangle`, `diamond`, `star`, `plus`, `cross` | `marker: dot` |
+| `markersize`  | a size in `px` or `pt` | `markersize: 8 px` |
+| `linecolor`   | a color name or `"#rrggbb"` | `linecolor: blue` |
+| `markercolor` | a color name or `"#rrggbb"` | `markercolor: "#f92200"` |
+| `x`, `y`      | axis limits `[min, max]`; expressions like `[-pi, pi]` work | `x: [-1, 1]` |
+| `title`, `xlabel`, `ylabel` | text | `title: cos(x)` |
+| `grid`        | `on` or `off` | `grid: on` |
+
+**Put hex colors in quotes.** `#` starts a comment, so `markercolor: #f92200` would leave the value empty. Write `markercolor: "#f92200"` instead.
+
+If you don't set a color, each line gets its own color automatically. A misspelled option, color or value is an error that names the line:
+
+```
+error: line 7: plotstyle ps, linecolor: unknown color 'bleu' (use a name like blue or "#rrggbb")
+```
 
 ## Errors
 

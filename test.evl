@@ -1,0 +1,14 @@
+x = range(-1, 0.05, 1)
+f = cos(2 * pi * x)
+
+plotstyle ps:
+    linestyle: solid
+    linewidth: 2 px
+    marker: dot
+    linecolor: blue
+    markercolor: "#f92200"
+    x: [-1, 1]
+    y: [-2, 2]
+
+# This will plot ps
+plot(f, ps)
