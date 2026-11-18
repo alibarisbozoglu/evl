@@ -246,6 +246,67 @@ The result is an ordinary list, so `len(f < 3)` counts the values that pass and 
 
 Answers with more than 50 values are shortened to the first and last 10.
 
+### Calculus
+
+EVL calculates integrals, derivatives and limits numerically. Answers are decimals, accurate to about 10–12 significant digits.
+
+| Function | Meaning | Example | Result |
+|----------|---------|---------|--------|
+| `integral(expr, x, a, b)` | area under `expr` as `x` goes from `a` to `b` | `integral(x^2, x, 0, 1)` | `0.333333333333` |
+| `derivative(expr, x, p)` | slope of `expr` at `x = p` | `derivative(sin(x), x, 0)` | `1` |
+| `limit(expr, x, p)` | value `expr` approaches as `x` approaches `p` | `limit(sin(x)/x, x, 0)` | `1` |
+
+The second argument names the variable. It's only used inside the expression and doesn't change a variable with the same name: after `x = 5; integral(x, x, 0, 1)`, `x` is still `5`.
+
+**Integrals**
+- Bounds can be infinite: `integral(exp(-x^2), x, -inf, inf)` gives `1.77245385091` (√π).
+- If `a > b`, the result is negative, as in maths.
+- Integrals that are infinite give an error: `integral(1/x, x, 0, 1)` reports that it doesn't converge.
+
+**Derivatives**
+- If the slope is different on each side of the point, there's no derivative, and EVL says so:
+
+  ```
+  $ evl 'derivative(abs(x), x, 0)'
+  error: derivative: not differentiable at x = 0 (slope -1 from the left, 1 from the right)
+  ```
+
+**Limits**
+- The point can be `inf` or `-inf`: `limit((1+1/x)^x, x, inf)` gives `2.718281828`.
+- Limits can be infinite: `limit(1/x^2, x, 0)` gives `inf`.
+- If the left and right limits differ, EVL says so. Add `"+"` (from the right) or `"-"` (from the left) to get one side:
+
+  ```
+  $ evl 'limit(1/x, x, 0)'
+  error: limit: left and right limits differ (-inf from the left, inf from the right); use limit(expr, x, 0, "+") or "-"
+  $ evl 'limit(1/x, x, 0, "+")'
+  ans: inf
+  ```
+
+- If the expression keeps oscillating, like `sin(1/x)` at 0, EVL reports that it doesn't settle. Some limits approach their value too slowly for a numeric method to confirm, like `sqrt(x)*log(x)` at 0; these also report that they don't settle.
+
+**Many points at once.** If the point or a bound is a range, you get one answer per value, ready to plot:
+
+```
+$ evl 'derivative(sin(x), x, [0:0.5:2])'
+ans: [1, 0.8775825619, 0.5403023059, 0.07073720167, -0.4161468365]
+$ evl 'integral(x^2, x, 0, [0:3])'
+ans: [0, 0.333333333333, 2.66666666667, 9]
+```
+
+**Lists.** With a single list argument, `derivative` and `integral` work on the list's values directly:
+
+- `derivative(f)` gives the slope at each point of `f`.
+- `integral(f)` gives the running area under `f`, starting at 0. The last value is the total area.
+
+```
+x = [0:0.1:6]
+f = sin(x)
+show plot(f) + plot(derivative(f)) + plot(integral(f))
+```
+
+These use the points you have (central differences and the trapezoid rule), so finer ranges give more accurate results. Parts of a list removed by a [comparison](#comparisons) aren't bridged: each piece is handled separately.
+
 ## Plotting
 
 Plotting has two steps. `plot(...)` describes a plot, and `show` arranges one or more plots in a window. Here's a complete example (`test.evl`):
