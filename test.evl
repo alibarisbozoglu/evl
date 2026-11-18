@@ -1,5 +1,7 @@
 x = range(-1, 0.05, 1)
 f = cos(2 * pi * x)
+g = -0.5 < f < 0.5
+h = -3 < [-5:5] < 2 
 
 plotstyle ps:
     linestyle: solid
@@ -10,5 +12,14 @@ plotstyle ps:
     xrange: [-1, 1]
     yrange: [-2, 2]
 
-# This will plot ps
-plot(f, ps)
+# This will plot f with ps, add g on top of the same plot and show them
+show plot(f, ps) + plot(g)
+
+# This will plot f with ps, and add a g plot BELOW the f plot (seperate plots)
+show plot(f, ps) plot(g)
+
+# This will plot f on the left, g on the right
+show plot(f) : plot(g)
+
+#This will plot f on top left, h in bottom left, g on the right
+show plot(f) plot(h) : plot(g)

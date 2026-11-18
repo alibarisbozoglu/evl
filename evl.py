@@ -10,10 +10,12 @@ Usage:
 """
 
 import ast
+import io
 import math
 import operator
 import re
 import sys
+import tokenize
 
 BIN_OPS = {
     ast.Add: operator.add,
@@ -28,6 +30,13 @@ BIN_OPS = {
 UNARY_OPS = {
     ast.UAdd: operator.pos,
     ast.USub: operator.neg,
+}
+
+COMPARE_OPS = {
+    ast.Lt: operator.lt,
+    ast.LtE: operator.le,
+    ast.Gt: operator.gt,
+    ast.GtE: operator.ge,
 }
 
 # Names available in every calculation.
@@ -64,7 +73,8 @@ CONVERSIONS = {
 }
 
 STYLE_FN = "__plotstyle__"  # internal: a plotstyle block becomes `name = __plotstyle__(i)`
-SPECIAL_FUNCTIONS = {"range", "plot", STYLE_FN}
+SHOW_FN = "__show__"  # internal: `show a b : c` becomes `__show__([[a, b], [c]])`
+SPECIAL_FUNCTIONS = {"range", "plot", "show", STYLE_FN, SHOW_FN}
 RESERVED = set(FUNCTIONS) | set(REDUCERS) | set(CONVERSIONS) | set(CONSTANTS) | SPECIAL_FUNCTIONS
 
 MAX_RANGE = 10_000_000
@@ -90,7 +100,8 @@ MARKERS = {
 }
 STYLE_KEYS = (
     "linestyle", "linewidth", "marker", "markersize", "linecolor",
-    "markercolor", "xrange", "yrange", "title", "xlabel", "ylabel", "grid",
+    "markercolor", "xrange", "yrange",
+    "title", "xlabel", "ylabel", "grid",
 )
 
 
@@ -100,13 +111,24 @@ class EvlError(Exception):
 
 class Vector:
     """A list of numbers, e.g. from range(). `domain` is the range it was
-    computed from (if any), used as the horizontal axis when plotting."""
+    computed from (if any), used as the horizontal axis when plotting.
+    `gaps` holds the positions where a comparison removed values just before,
+    so plot() doesn't draw a line across them."""
 
-    __slots__ = ("values", "domain")
+    __slots__ = ("values", "domain", "gaps")
 
-    def __init__(self, values, domain=None):
+    def __init__(self, values, domain=None, gaps=frozenset()):
         self.values = list(values)
         self.domain = domain
+        self.gaps = gaps
+
+
+class Plot:
+    """What plot() returns: one or more (list, style) layers drawn on the
+    same axes. Nothing is drawn until it's shown. plot(f) + plot(g) adds layers."""
+
+    def __init__(self, layers):
+        self.layers = layers
 
 
 class PlotStyle:
@@ -120,6 +142,97 @@ def preprocess_expression(source):
     source = RANGE2.sub(r"range(\1,1,\2)", source)
     source = DIGITS_ARG.sub(r'\1("\2")', source)
     return source.replace("^", "**")  # allow 2^3 as power
+
+
+def rewrite_show_statements(source, multiline):
+    """Turn `show a b : c` into `__show__([[a, b], [c]])`, line by line.
+
+    In a show layout, `:` separates columns (left to right) and plots written
+    one after another in a column are stacked top to bottom. `+` (overlaying
+    plots on the same axes) is ordinary arithmetic on plot values.
+    """
+    lines = source.split("\n")
+    for number, line in enumerate(lines, 1):
+        if "show" in line:
+            try:
+                lines[number - 1] = rewrite_show_line(line)
+            except EvlError as exc:
+                raise EvlError(f"line {number}: {exc}" if multiline else str(exc)) from None
+    return "\n".join(lines)
+
+
+def rewrite_show_line(line):
+    try:
+        tokens = list(tokenize.generate_tokens(io.StringIO(line).readline))
+    except (tokenize.TokenError, IndentationError, SyntaxError):
+        return line  # let the parser report the problem
+    skip = {tokenize.COMMENT, tokenize.NEWLINE, tokenize.NL, tokenize.ENDMARKER,
+            tokenize.INDENT, tokenize.DEDENT}
+    tokens = [t for t in tokens if t.type not in skip]
+
+    # Split into statements at ';' outside brackets.
+    statements, current, depth = [], [], 0
+    for tok in tokens:
+        if tok.type == tokenize.OP and tok.string in "([{":
+            depth += 1
+        elif tok.type == tokenize.OP and tok.string in ")]}":
+            depth -= 1
+        if depth == 0 and tok.type == tokenize.OP and tok.string == ";":
+            statements.append(current)
+            current = []
+        else:
+            current.append(tok)
+    statements.append(current)
+
+    replacements = []
+    for stmt in statements:
+        if len(stmt) < 2 or stmt[0].type != tokenize.NAME or stmt[0].string != "show":
+            continue
+        if stmt[1].type == tokenize.OP and stmt[1].string not in "([-+:":
+            continue  # e.g. `show = 1`: not a show statement (and an error later)
+        columns = split_show_layout(stmt[1:], line)
+        call = SHOW_FN + "([" + ", ".join("[" + ", ".join(col) + "]" for col in columns) + "])"
+        replacements.append((stmt[0].start[1], stmt[-1].end[1], call))
+
+    for start, end, call in reversed(replacements):
+        line = line[:start] + call + line[end:]
+    return line
+
+
+def split_show_layout(tokens, line):
+    def ends_operand(tok):
+        return tok.type in (tokenize.NAME, tokenize.NUMBER, tokenize.STRING) or tok.string in (")", "]")
+
+    def starts_operand(tok, prev):
+        if tok.string in ("(", "["):
+            return prev.type != tokenize.NAME and prev.string not in (")", "]")  # f(x) is a call
+        return tok.type in (tokenize.NAME, tokenize.NUMBER, tokenize.STRING)
+
+    columns, column, item, depth, prev = [], [], [], 0, None
+    for tok in tokens:
+        if depth == 0 and tok.type == tokenize.OP and tok.string == ":":
+            if item:
+                column.append(item)
+            if not column:
+                raise EvlError("show: empty column before ':'")
+            columns.append(column)
+            column, item, prev = [], [], None
+            continue
+        if depth == 0 and prev is not None and ends_operand(prev) and starts_operand(tok, prev):
+            column.append(item)  # `a b`: b goes below a
+            item = []
+        if tok.type == tokenize.OP and tok.string in "([{":
+            depth += 1
+        elif tok.type == tokenize.OP and tok.string in ")]}":
+            depth -= 1
+        item.append(tok)
+        prev = tok
+    if item:
+        column.append(item)
+    if not column:
+        raise EvlError("show: nothing to show after ':'" if columns else "show: nothing to show")
+    columns.append(column)
+    return [[line[it[0].start[1]:it[-1].end[1]] for it in col] for col in columns]
 
 
 def parse_style_value(raw):
@@ -180,6 +293,7 @@ class Evaluator:
         multiline = "\n" in source.strip()
         source, self.styles = extract_plotstyles(source)
         source = preprocess_expression(source)
+        source = rewrite_show_statements(source, multiline)
         try:
             tree = ast.parse(source, mode="exec")
         except SyntaxError as exc:
@@ -205,10 +319,14 @@ class Evaluator:
                 if target.id in RESERVED:
                     raise EvlError(f"cannot assign to built-in '{target.id}'")
                 self.variables[target.id] = value
-            # Defining a plotstyle block isn't a calculation: print nothing.
-            return None if isinstance(value, PlotStyle) else value
+            # Defining a style or a plot isn't a calculation: print nothing.
+            return None if isinstance(value, (PlotStyle, Plot)) else value
         if isinstance(stmt, ast.Expr):
-            return self.eval(stmt.value)
+            value = self.eval(stmt.value)
+            if isinstance(value, Plot):  # a plot on its own line is shown
+                self.show([[value]])
+                return None
+            return value
         raise EvlError("only expressions and assignments are allowed")
 
     # ---- expressions -------------------------------------------------------
@@ -225,6 +343,10 @@ class Evaluator:
             return Vector(values)
         if isinstance(node, ast.BinOp) and type(node.op) in BIN_OPS:
             left, right = self.eval(node.left), self.eval(node.right)
+            if isinstance(left, Plot) or isinstance(right, Plot):
+                if isinstance(node.op, ast.Add) and isinstance(left, Plot) and isinstance(right, Plot):
+                    return Plot(left.layers + right.layers)  # draw both on the same axes
+                raise EvlError("plots can only be combined with +, e.g. plot(f) + plot(g)")
             if isinstance(left, str) or isinstance(right, str):
                 raise EvlError(
                     "can't do arithmetic on a bin/oct/hex result; "
@@ -233,9 +355,13 @@ class Evaluator:
             return self.elementwise(BIN_OPS[type(node.op)], [left, right], "arithmetic")
         if isinstance(node, ast.UnaryOp) and type(node.op) in UNARY_OPS:
             operand = self.eval(node.operand)
+            if isinstance(operand, Plot):
+                raise EvlError("can't do arithmetic on a plot")
             if isinstance(operand, str):
                 raise EvlError("can't do arithmetic on a bin/oct/hex result; convert it to dec first")
             return self.elementwise(UNARY_OPS[type(node.op)], [operand], "arithmetic")
+        if isinstance(node, ast.Compare):
+            return self.compare(node)
         if isinstance(node, ast.Name):
             if node.id in self.variables:
                 return self.variables[node.id]
@@ -245,6 +371,38 @@ class Evaluator:
         if isinstance(node, ast.Call) and isinstance(node.func, ast.Name):
             return self.call(node)
         raise EvlError(f"unsupported expression: {ast.unparse(node)}")
+
+    def compare(self, node):
+        """a < b, or a chain like -0.5 < f < 0.5 (every comparison must hold).
+
+        With numbers only, the answer is true / false. With a list, keep the
+        elements that pass: [0, 1, 2, 3, 4] < 3 -> [0, 1, 2]. If several sides
+        are lists, the first list in the chain is the one filtered.
+        """
+        if any(type(op) not in COMPARE_OPS for op in node.ops):
+            raise EvlError("supported comparisons are <, <=, > and >=")
+        operands = [self.eval(node.left)] + [self.eval(c) for c in node.comparators]
+        for side in operands:
+            if isinstance(side, str):
+                raise EvlError("can't compare a bin/oct/hex result; convert it to dec first")
+            if isinstance(side, (PlotStyle, Plot)):
+                raise EvlError("can only compare numbers, ranges and lists")
+
+        results = [
+            self.elementwise(COMPARE_OPS[type(op)], [operands[i], operands[i + 1]], "comparison")
+            for i, op in enumerate(node.ops)
+        ]
+        masks = [r for r in results if isinstance(r, Vector)]
+        if not masks:
+            return all(results)  # numbers only: true / false
+        if not all(results[i] for i in range(len(results)) if not isinstance(results[i], Vector)):
+            keep = [False] * len(masks[0].values)  # e.g. 3 < 2 < f: nothing passes
+        else:
+            if any(len(m.values) != len(masks[0].values) for m in masks):
+                raise EvlError("comparison: lists have different lengths")
+            keep = [all(m.values[i] for m in masks) for i in range(len(masks[0].values))]
+        source = next(side for side in operands if isinstance(side, Vector))
+        return filter_vector(source, keep)
 
     def call(self, node):
         name = node.func.id
@@ -257,6 +415,11 @@ class Evaluator:
             if not isinstance(index, int) or not 0 <= index < len(self.styles):
                 raise EvlError(f"unknown function '{name}'")
             return self.make_style(index)
+        if name == SHOW_FN:
+            columns = [[self.eval(item) for item in col.elts] for col in node.args[0].elts]
+            return self.show(columns)
+        if name == "show":
+            raise EvlError("show is a statement on its own, e.g. show plot(f) : plot(g)")
 
         args = [self.eval(arg) for arg in node.args]
         if any(isinstance(arg, str) for arg in args):
@@ -271,6 +434,8 @@ class Evaluator:
             return REDUCERS[name](args[0].values)
         if any(isinstance(arg, PlotStyle) for arg in args):
             raise EvlError(f"{name}: a plotstyle can only be passed to plot()")
+        if any(isinstance(arg, Plot) for arg in args):
+            raise EvlError(f"{name}: expects numbers, not a plot")
 
         func = FUNCTIONS.get(name)
         if func is None:
@@ -289,12 +454,13 @@ class Evaluator:
             if any(len(v.values) != length for v in vectors):
                 sizes = " and ".join(str(len(v.values)) for v in vectors)
                 raise EvlError(f"{name}: lists have different lengths ({sizes})")
-            domain = next((v.domain for v in vectors if v.domain is not None), None)
+            with_domain = next((v for v in vectors if v.domain is not None), vectors[0])
+            domain, gaps = with_domain.domain, with_domain.gaps
             values = [
                 func(*[a.values[i] if isinstance(a, Vector) else a for a in args])
                 for i in range(length)
             ]
-            return Vector(values, domain)
+            return Vector(values, domain, gaps)
         except ZeroDivisionError:
             raise EvlError("division by zero") from None
         except OverflowError:
@@ -308,7 +474,7 @@ class Evaluator:
         if len(node.args) != 1:
             raise EvlError(f"{name} takes exactly one argument")
         value = self.eval(node.args[0])
-        if isinstance(value, (Vector, PlotStyle)):
+        if isinstance(value, (Vector, PlotStyle, Plot)):
             raise EvlError(f"{name}: works on a single number, not a list")
 
         if src == 10:
@@ -386,60 +552,96 @@ class Evaluator:
         return value  # title, xlabel, ylabel
 
     def plot(self, args):
-        style = args[-1] if args and isinstance(args[-1], PlotStyle) else None
-        series = args[:-1] if style else args
-        if not series:
-            raise EvlError("plot: nothing to plot, e.g. plot(f) or plot(f, style)")
-        for item in series:
-            if isinstance(item, PlotStyle):
-                raise EvlError("plot: the plotstyle must be the last argument")
-            if not isinstance(item, Vector):
-                raise EvlError("plot: expects a range or list, e.g. plot(cos(x))")
+        """plot(f) or plot(f, style): describe a plot. Nothing is drawn until shown."""
+        if not 1 <= len(args) <= 2:
+            raise EvlError("plot takes a list and an optional plotstyle, e.g. plot(f, ps); "
+                           "use plot(f) + plot(g) to draw several in one plot")
+        data = args[0]
+        style = args[1] if len(args) == 2 else None
+        if isinstance(data, PlotStyle):
+            raise EvlError("plot: the list comes first, then the plotstyle: plot(f, ps)")
+        if not isinstance(data, Vector):
+            raise EvlError("plot: expects a range or list, e.g. plot(cos(x))")
+        if style is not None and not isinstance(style, PlotStyle):
+            raise EvlError("plot: the second argument must be a plotstyle; "
+                           "use plot(f) + plot(g) to draw several in one plot")
+        return Plot([(data, style)])
+
+    def show(self, columns):
+        """Open one window: columns left to right, plots in a column top to bottom."""
+        for column in columns:
+            for i, item in enumerate(column):
+                if isinstance(item, Vector):
+                    column[i] = Plot([(item, None)])  # `show f` is short for `show plot(f)`
+                elif not isinstance(item, Plot):
+                    raise EvlError("show: expects plots, e.g. show plot(f) : plot(g)")
 
         plt = load_pyplot()
-        options = style.options if style else {}
-        fig, ax = plt.subplots()
-        if style:
-            fig.canvas.manager.set_window_title(f"evl - {style.name}")
+        rows = max(len(column) for column in columns)
+        width = 6.4 if len(columns) == 1 else min(5.0 * len(columns), 16)
+        height = 4.8 if rows == 1 else min(3.2 * rows, 10)
+        fig = plt.figure(figsize=(width, height), layout="constrained")
+        names = sorted({style.name for column in columns for plot in column
+                        for _, style in plot.layers if style is not None})
+        fig.canvas.manager.set_window_title("evl" + (f" - {', '.join(names)}" if names else ""))
 
-        def points(size):
-            number, unit = size
-            return number * 72 / fig.dpi if unit == "px" else number
-
-        kwargs = {}
-        if "linestyle" in options:
-            kwargs["linestyle"] = options["linestyle"]
-        if "linewidth" in options:
-            kwargs["linewidth"] = points(options["linewidth"])
-        if "marker" in options:
-            kwargs["marker"] = options["marker"]
-        if "markersize" in options:
-            kwargs["markersize"] = points(options["markersize"])
-        if "linecolor" in options:
-            kwargs["color"] = options["linecolor"]
-        if "markercolor" in options:
-            kwargs["markerfacecolor"] = kwargs["markeredgecolor"] = options["markercolor"]
-
-        for vector in series:
-            xs = vector.domain if vector.domain is not None else list(range(len(vector.values)))
-            ax.plot(xs, vector.values, **kwargs)
-
-        if "xrange" in options:
-            ax.set_xlim(*options["xrange"])
-        if "yrange" in options:
-            ax.set_ylim(*options["yrange"])
-        for key, setter in (("title", ax.set_title), ("xlabel", ax.set_xlabel),
-                            ("ylabel", ax.set_ylabel)):
-            if key in options:
-                setter(options[key])
-        if options.get("grid"):
-            ax.grid(True)
+        grid = fig.add_gridspec(1, len(columns))
+        for c, column in enumerate(columns):
+            cells = grid[c].subgridspec(len(column), 1)
+            for r, plot in enumerate(column):
+                self.draw(fig, fig.add_subplot(cells[r]), plot)
 
         self.figures += 1
         if interactive_session():
             plt.show(block=False)
             plt.pause(0.05)
         return None
+
+    def draw(self, fig, ax, plot):
+        def points(size):
+            number, unit = size
+            return number * 72 / fig.dpi if unit == "px" else number
+
+        axes_options = {}  # xrange, title, ...: the first layer that sets one wins
+        for vector, style in plot.layers:
+            options = style.options if style else {}
+            for key in ("xrange", "yrange", "title", "xlabel", "ylabel", "grid"):
+                if key in options:
+                    axes_options.setdefault(key, options[key])
+
+            kwargs = {}
+            if "linestyle" in options:
+                kwargs["linestyle"] = options["linestyle"]
+            if "linewidth" in options:
+                kwargs["linewidth"] = points(options["linewidth"])
+            if "marker" in options:
+                kwargs["marker"] = options["marker"]
+            if "markersize" in options:
+                kwargs["markersize"] = points(options["markersize"])
+            if "linecolor" in options:
+                kwargs["color"] = options["linecolor"]
+            if "markercolor" in options:
+                kwargs["markerfacecolor"] = kwargs["markeredgecolor"] = options["markercolor"]
+
+            xs = vector.domain if vector.domain is not None else list(range(len(vector.values)))
+            ys = vector.values
+            if vector.gaps:  # break the line where a comparison removed values
+                xs, ys = list(xs), list(ys)
+                for i in sorted(vector.gaps, reverse=True):
+                    xs.insert(i, math.nan)
+                    ys.insert(i, math.nan)
+            ax.plot(xs, ys, **kwargs)
+
+        if "xrange" in axes_options:
+            ax.set_xlim(*axes_options["xrange"])
+        if "yrange" in axes_options:
+            ax.set_ylim(*axes_options["yrange"])
+        for key, setter in (("title", ax.set_title), ("xlabel", ax.set_xlabel),
+                            ("ylabel", ax.set_ylabel)):
+            if key in axes_options:
+                setter(axes_options[key])
+        if axes_options.get("grid"):
+            ax.grid(True)
 
 
 def is_number(value):
@@ -451,6 +653,18 @@ def pick(value, choices):
     if key not in choices:
         raise EvlError(f"'{value}' is not one of: {', '.join(choices)}")
     return choices[key]
+
+
+def filter_vector(vector, keep):
+    """The elements of vector where keep is true, with their x positions."""
+    kept = [i for i, ok in enumerate(keep) if ok]
+    gaps = frozenset(
+        j for j, i in enumerate(kept)
+        if j > 0 and (i != kept[j - 1] + 1 or i in vector.gaps)
+    )
+    # A plain list is plotted against positions 0, 1, 2, ...: keep the originals.
+    domain = kept if vector.domain is None else [vector.domain[i] for i in kept]
+    return Vector([vector.values[i] for i in kept], domain, gaps)
 
 
 def make_range(args):
@@ -587,6 +801,8 @@ def show_plots(evaluator):
 # ---- output ----------------------------------------------------------------
 
 def format_number(value):
+    if isinstance(value, bool):
+        return "true" if value else "false"
     if isinstance(value, float) and value.is_integer() and abs(value) < 1e16:
         return str(int(value))
     return str(value)
@@ -601,6 +817,8 @@ def format_value(value):
         return f"[{', '.join(items)}]"
     if isinstance(value, PlotStyle):
         return f"plotstyle {value.name}"
+    if isinstance(value, Plot):
+        return "plot"
     return format_number(value)
 
 

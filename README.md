@@ -213,15 +213,48 @@ Combining two lists works element by element, and they must have the same length
 
 These functions turn a list into a single number: `sum`, `len`, `mean`, `min` and `max`. For example, `sum([1:100])` gives `5050`.
 
+### Comparisons
+
+`<`, `<=`, `>` and `>=` compare two values. With plain numbers you get `true` or `false`:
+
+```
+$ evl '2 < 3'
+ans: true
+```
+
+With a range or list, a comparison **keeps the elements that pass** and drops the rest:
+
+```
+$ evl
+f = [0, 1, 2, 3, 4];
+g = f < 3
+ans: [0, 1, 2]
+```
+
+The list can be on either side: `3 > f` also gives `[0, 1, 2]`.
+
+Chain comparisons to keep values between two limits. Every comparison in the chain must hold:
+
+```
+$ evl '2 < [0:10] < 6'
+ans: [3, 4, 5]
+```
+
+With plain numbers, a chain gives `true` or `false` (`1 < 2 < 3` gives `true`). If more than one side is a list, the first list in the chain is the one filtered: `0 < [1, 2, 3] < [3, 3, 3]` gives `[1, 2]`.
+
+The result is an ordinary list, so `len(f < 3)` counts the values that pass and `sum(f < 3)` adds them up. If nothing passes, you get `[]`.
+
 Answers with more than 50 values are shortened to the first and last 10.
 
 ## Plotting
 
-`plot` opens a window with a graph. Here's a complete example (`test.evl`):
+Plotting has two steps. `plot(...)` describes a plot, and `show` arranges one or more plots in a window. Here's a complete example (`test.evl`):
 
 ```
-x = range(-1, 0.1, 1)
-f = cos(x)
+x = range(-1, 0.05, 1)
+f = cos(2 * pi * x)
+g = -0.5 < f < 0.5
+h = -3 < [-5:5] < 2
 
 plotstyle ps:
     linestyle: solid
@@ -232,22 +265,66 @@ plotstyle ps:
     xrange: [-1, 1]
     yrange: [-2, 2]
 
-# This will plot ps
-plot(f, ps)
+# This will plot f with ps, add g on top of the same plot and show them
+show plot(f, ps) + plot(g)
+
+# This will plot f with ps, and add a g plot BELOW the f plot (seperate plots)
+show plot(f, ps) plot(g)
+
+# This will plot f on the left, g on the right
+show plot(f) : plot(g)
+
+#This will plot f on top left, h in bottom left, g on the right
+show plot(f) plot(h) : plot(g)
 ```
 
 ```sh
 evl -f test.evl
 ```
 
+This opens four windows, one for each `show`.
+
 ### plot
 
-`plot(f)` draws `f` against the range it was calculated from. Above, `f = cos(x)`, so the graph shows `cos(x)` over `x` from -1 to 1. A list with no range behind it, like `[3, 1, 4]`, is drawn against its position (0, 1, 2, ...).
+`plot(f)` or `plot(f, style)` describes a plot of the list `f`. It takes at most two arguments: the list and, optionally, a [plotstyle](#plotstyle).
 
-- `plot(f, g)` draws several lines in one window.
-- `plot(f, ps)` uses the plotstyle `ps`. The style always goes last.
-- Each `plot` call opens its own window. EVL waits until you close all of them before it exits.
-- In multiline mode, the window opens straight away and you can keep typing.
+`f` is drawn against the range it was calculated from: with `x = [-1:0.05:1]` and `f = cos(2 * pi * x)`, the graph shows `f` over `x` from -1 to 1. A list with no range behind it, like `[3, 1, 4]`, is drawn against its position (0, 1, 2, ...). A [comparison](#comparisons) result keeps each value at its original x position, and the line breaks where values were removed.
+
+To draw several lines in the **same plot**, add plots with `+`:
+
+```
+show plot(f, ps) + plot(g)
+```
+
+The plot's axis settings (`xrange`, `yrange`, `title`, `xlabel`, `ylabel`, `grid`) come from the first style that sets them. Line and marker options apply to each line separately.
+
+Plots are values, so you can store them: `p = plot(f) + plot(g)`, then `show p`.
+
+### show
+
+`show` opens one window and arranges the plots in it:
+
+| Layout       | Meaning |
+|--------------|---------|
+| `a + b`      | `a` and `b` in the same plot |
+| `a b`        | `a` on top, `b` below it (separate plots) |
+| `a : b`      | `a` on the left, `b` on the right |
+
+`+` groups first, then plots written one after another, then `:`. So `show plot(f) plot(h) : plot(g)` gives a left column with `f` above `h`, and `g` on the right at full height:
+
+```
+┌─────────┬─────────┐
+│    f    │         │
+├─────────┤    g    │
+│    h    │         │
+└─────────┴─────────┘
+```
+
+Shortcuts:
+- `show f` is short for `show plot(f)`.
+- A plot on its own line is shown in its own window, so `plot(f)` alone is the same as `show plot(f)`.
+
+Each `show` opens its own window. With `-f` or a one-line command, EVL waits until you close all the windows before it exits. In multiline mode, the window opens straight away and you can keep typing.
 
 ### plotstyle
 
