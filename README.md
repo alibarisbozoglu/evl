@@ -118,6 +118,32 @@ ans: 48
 
 Names follow Python rules: letters, digits and `_`, not starting with a digit. If the last statement is an assignment, EVL prints the assigned value.
 
+### Functions of your own
+
+Define a function with `name(parameters) = formula`:
+
+```
+$ evl
+f(x) = x^2;
+f(3)
+ans: 9
+f([1, 2, 3])
+ans: [1, 4, 9]
+x = [0:1:4];
+f
+ans: [0, 1, 4, 9, 16]
+```
+
+- **Calling a function:** `f(3)` uses `x = 3` for that call only, and a list or range argument gives a list. If a variable `x` exists, the call leaves it unchanged.
+- **Plain `f`:** this computes the formula with the current `x`. If `x` isn't defined, `f` on its own line prints the definition (`ans: f(x) = x^2`). Elsewhere it is an error.
+- **Without the parameters:** `f = x^2` computes `x^2` right away. If `x` isn't defined, that's an error, and the message suggests writing `f(x) = ...`.
+- **Several parameters:** `area(w, h) = w * h; area(3, 4)` gives `12`.
+- **Using other functions:** `g(x) = f(x) + 1` works. A function can't use itself, so `f(x) = f(x) + 1` is an error.
+- **Other variables in the formula:** variables other than the parameters are looked up when the function is called. With `f(x) = a * x`, `f(2)` uses the current `a`.
+- **Calculus:** `integral(f(t), t, 0, 1)` and `integral(f, x, 0, 1)` both give `0.333333333333`.
+- **Names:** a function can't be named after a built-in like `sin`, and a parameter can't be named after one like `pi`.
+- **Output:** a definition prints nothing, like assigning a plotstyle.
+
 ### Constants
 
 `pi`, `e`, `tau`, `inf`

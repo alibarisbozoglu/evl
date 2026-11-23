@@ -74,8 +74,9 @@ CONVERSIONS = {
 
 STYLE_FN = "__plotstyle__"  # internal: a plotstyle block becomes `name = __plotstyle__(i)`
 SHOW_FN = "__show__"  # internal: `show a b : c` becomes `__show__([[a, b], [c]])`
+DEFINE_FN = "__function__"  # internal: `f(x) = body` becomes `f = __function__("f", [x], body)`
 CALCULUS_FUNCTIONS = {"integral", "derivative", "limit"}
-SPECIAL_FUNCTIONS = {"range", "plot", "show", STYLE_FN, SHOW_FN} | CALCULUS_FUNCTIONS
+SPECIAL_FUNCTIONS = {"range", "plot", "show", STYLE_FN, SHOW_FN, DEFINE_FN} | CALCULUS_FUNCTIONS
 RESERVED = set(FUNCTIONS) | set(REDUCERS) | set(CONVERSIONS) | set(CONSTANTS) | SPECIAL_FUNCTIONS
 
 MAX_RANGE = 10_000_000
@@ -132,13 +133,66 @@ class Plot:
         self.layers = layers
 
 
+class Function:
+    """f(x) = x^2: a formula with parameters. f(3) computes it with x = 3;
+    a plain `f` computes it with the current value of x (e.g. a range)."""
+
+    def __init__(self, name, params, body):
+        self.name = name
+        self.params = params
+        self.body = body
+
+    def __str__(self):
+        body = ast.unparse(self.body).replace(" ** ", "^").replace("**", "^")
+        return f"{self.name}({', '.join(self.params)}) = {body}"
+
+
 class PlotStyle:
     def __init__(self, name, options):
         self.name = name
         self.options = options
 
 
+FUNCTION_DEF = re.compile(
+    r"(^|;)([ \t]*)([A-Za-z_]\w*)[ \t]*\(([\w \t,]*)\)[ \t]*=(?!=)", re.MULTILINE
+)
+
+
+def rewrite_function_definitions(source):
+    """`f(x, y) = body` -> `f = __function__("f", [x, y], body)`. The body ends
+    at the next ';', newline or comment outside brackets and quotes."""
+    out, pos = [], 0
+    for match in FUNCTION_DEF.finditer(source):
+        if match.start() < pos:
+            continue
+        lead, indent, name, params = match.groups()
+        params = [p.strip() for p in params.split(",")] if params.strip() else []
+        if not all(re.fullmatch(r"[A-Za-z_]\w*", p) for p in params):
+            continue  # not a definition; let the parser report it
+        end, depth, quote = match.end(), 0, None
+        while end < len(source):
+            ch = source[end]
+            if quote:
+                quote = None if ch == quote else quote
+            elif ch in "\"'":
+                quote = ch
+            elif ch in "([{":
+                depth += 1
+            elif ch in ")]}":
+                depth -= 1
+            elif depth == 0 and ch in ";\n#":
+                break
+            end += 1
+        body = source[match.end():end]
+        out.append(source[pos:match.start()])
+        out.append(f'{lead}{indent}{name} = {DEFINE_FN}("{name}", [{", ".join(params)}], {body.strip() or "None"})')
+        pos = end
+    out.append(source[pos:])
+    return "".join(out)
+
+
 def preprocess_expression(source):
+    source = rewrite_function_definitions(source)
     source = RANGE3.sub(r"range(\1,\2,\3)", source)
     source = RANGE2.sub(r"range(\1,1,\2)", source)
     source = DIGITS_ARG.sub(r'\1("\2")', source)
@@ -288,6 +342,7 @@ class Evaluator:
         self.variables = {}
         self.styles = []
         self.figures = 0
+        self.active = set()  # functions being computed, to catch f(x) = f(x) + 1
 
     def run(self, source):
         """Evaluate ';' / newline separated statements, return the last value."""
@@ -313,17 +368,30 @@ class Evaluator:
 
     def run_statement(self, stmt):
         if isinstance(stmt, ast.Assign):
-            value = self.eval(stmt.value)
             for target in stmt.targets:
                 if not isinstance(target, ast.Name):
                     raise EvlError("can only assign to simple names")
                 if target.id in RESERVED:
                     raise EvlError(f"cannot assign to built-in '{target.id}'")
+            try:
+                value = self.eval(stmt.value)
+            except EvlError as exc:
+                unknown = re.fullmatch(r"unknown variable '(\w+)'", str(exc))
+                if unknown:  # f = x^2 with x undefined: maybe a function was meant
+                    var, target = unknown.group(1), stmt.targets[0].id
+                    raise EvlError(f"{exc} (to define a function of {var}, write {target}({var}) = ...)") from None
+                raise
+            for target in stmt.targets:
                 self.variables[target.id] = value
-            # Defining a style or a plot isn't a calculation: print nothing.
-            return None if isinstance(value, (PlotStyle, Plot)) else value
+            # Defining a style, a plot or a function isn't a calculation: print nothing.
+            return None if isinstance(value, (PlotStyle, Plot, Function)) else value
         if isinstance(stmt, ast.Expr):
-            value = self.eval(stmt.value)
+            node = stmt.value
+            if isinstance(node, ast.Name) and isinstance(self.variables.get(node.id), Function):
+                func = self.variables[node.id]
+                if any(p not in self.variables for p in func.params):
+                    return func  # `f` on its own shows the definition
+            value = self.eval(node)
             if isinstance(value, Plot):  # a plot on its own line is shown
                 self.show([[value]])
                 return None
@@ -365,13 +433,62 @@ class Evaluator:
             return self.compare(node)
         if isinstance(node, ast.Name):
             if node.id in self.variables:
-                return self.variables[node.id]
+                value = self.variables[node.id]
+                if isinstance(value, Function):
+                    return self.apply(value, None)
+                return value
             if node.id in CONSTANTS:
                 return CONSTANTS[node.id]
             raise EvlError(f"unknown variable '{node.id}'")
         if isinstance(node, ast.Call) and isinstance(node.func, ast.Name):
             return self.call(node)
         raise EvlError(f"unsupported expression: {ast.unparse(node)}")
+
+    def define_function(self, node):
+        """__function__("f", [x, y], body), from the rewritten `f(x, y) = body`."""
+        name, params, body = node.args
+        if isinstance(body, ast.Constant) and body.value is None:
+            raise EvlError(f"{name.value}: missing formula after '='")
+        names = [p.id for p in params.elts]
+        for param in names:
+            if param in RESERVED:
+                raise EvlError(f"{name.value}: '{param}' is a built-in name, pick another parameter name")
+        if len(set(names)) != len(names):
+            raise EvlError(f"{name.value}: parameter names must be different")
+        return Function(name.value, names, body)
+
+    def apply(self, func, args):
+        """Compute func's formula. args=None (a plain `f`) uses the current
+        values of its parameters; otherwise they're bound to args for the call."""
+        if args is None:
+            missing = [p for p in func.params if p not in self.variables]
+            if missing:
+                call = f"{func.name}({', '.join('2' for _ in func.params)})"
+                raise EvlError(
+                    f"'{func.name}' is a function of {', '.join(func.params)}: "
+                    f"call it like {call}, or define {missing[0]} first"
+                )
+        elif len(args) != len(func.params):
+            raise EvlError(
+                f"{func.name} takes {len(func.params)} argument{'s' * (len(func.params) != 1)}, "
+                f"got {len(args)}"
+            )
+        if func.name in self.active:
+            raise EvlError(f"'{func.name}' is defined in terms of itself")
+
+        saved = {p: self.variables.get(p, _MISSING) for p in func.params}
+        if args is not None:
+            self.variables.update(zip(func.params, args))
+        self.active.add(func.name)
+        try:
+            return self.eval(func.body)
+        finally:
+            self.active.discard(func.name)
+            for param, value in saved.items():
+                if value is _MISSING:
+                    self.variables.pop(param, None)
+                else:
+                    self.variables[param] = value
 
     def compare(self, node):
         """a < b, or a chain like -0.5 < f < 0.5 (every comparison must hold).
@@ -409,6 +526,15 @@ class Evaluator:
         name = node.func.id
         if node.keywords:
             raise EvlError("keyword arguments are not supported")
+        if name == DEFINE_FN:
+            return self.define_function(node)
+        if isinstance(self.variables.get(name), Function):
+            args = [self.eval(arg) for arg in node.args]
+            if any(isinstance(arg, (str, Plot, PlotStyle, Function)) for arg in args):
+                raise EvlError(f"{name}: expects numbers, ranges or lists")
+            return self.apply(self.variables[name], args)
+        if name in self.variables:
+            raise EvlError(f"'{name}' is a variable, not a function")
         if name in CONVERSIONS:
             return self.convert(node)
         if name == STYLE_FN:
@@ -1191,6 +1317,8 @@ def format_value(value):
         return f"plotstyle {value.name}"
     if isinstance(value, Plot):
         return "plot"
+    if isinstance(value, Function):
+        return str(value)
     return format_number(value)
 
 
