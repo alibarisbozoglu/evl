@@ -91,7 +91,45 @@ def read_file(path):
         raise EvlError(f"cannot read '{path}': not a text file") from None
 
 
+HELP = """\
+evl - quick calculations from the command line
+
+usage:
+  evl EXPRESSION      evaluate and print the answer, e.g. evl 5 + 5
+  evl -f FILE         run every statement in FILE
+  evl                 multiline mode: lines ending in ';' are collected, a line
+                      without ';' prints the answer, an empty line quits
+  evl -h, --help      show this help
+
+  Quote expressions that contain ; * ( ) or ^, e.g. evl 'x = 4; 5*x + 4'
+
+language:
+  + - * / // % ^ (or **)      arithmetic, 2^10
+  x = 4; 5*x + 4              variables, statements separated by ; or newlines
+  pi e tau inf                constants
+  sqrt sin log exp abs ...    math functions (log(x, base) for other bases)
+  hex2dec(ff) dec2bin(10)     base conversions between bin, oct, dec and hex
+  [0:0.1:1] range(0, 0.1, 1)  ranges (start:step:end, end included); [1, 2, 3] lists
+  sum mean min max len        reduce a list to one number
+  f < 3   -1 < f < 1          keep the list values that pass the comparison
+  f(x) = x^2; f(3)            define and call your own functions
+  integral(x^2, x, 0, 1)      numeric calculus; also derivative(expr, x, point),
+  limit(sin(x)/x, x, 0)       limit(..., "+") / "-", derivative(f) / integral(f) of a list
+  plot(f) plot(f, style)      plot a list (needs matplotlib)
+  show plot(f) + plot(g)      + overlays, a space stacks plots, ':' starts a column
+  plotstyle NAME:             indented 'key: value' lines: linestyle, linewidth,
+                              marker, markersize, linecolor, markercolor,
+                              xrange, yrange, title, xlabel, ylabel, grid
+  # comment
+
+See README.md in the evl project folder for details.
+"""
+
+
 def main(argv):
+    if argv and argv[0] in ("-h", "--help"):
+        print(HELP, end="")
+        return 0
     try:
         if argv and argv[0] in ("-f", "--file"):
             if len(argv) != 2:

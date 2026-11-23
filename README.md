@@ -33,6 +33,8 @@ Check that `~/.local/bin` is on your `PATH` (`echo $PATH`). Because `evl` is a l
 
 ## Usage
 
+`evl -h` (or `evl --help`) prints a short summary of the usage and the language.
+
 ### One-line mode
 
 Pass the expression as arguments:
