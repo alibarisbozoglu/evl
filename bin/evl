@@ -1,0 +1,11 @@
+#!/usr/bin/env python3
+"""Launcher for the evl command. Works when symlinked, e.g. from ~/.local/bin."""
+
+import os
+import sys
+
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.realpath(__file__))))
+
+from evl.cli import run  # noqa: E402
+
+run()

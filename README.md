@@ -9,14 +9,27 @@ ans: 10
 
 ## Installation
 
-EVL needs Python 3.9 or newer. Plotting also needs [matplotlib](https://matplotlib.org/) (`pip install --user matplotlib`); everything else works without it. Make the script executable and link it into a folder on your `PATH`:
+EVL needs Python 3.9 or newer. Plotting also needs [matplotlib](https://matplotlib.org/) (`pip install --user matplotlib`); everything else works without it. Make the launcher executable and link it into a folder on your `PATH`:
 
 ```sh
-chmod +x evl.py
-ln -s "$PWD/evl.py" ~/.local/bin/evl
+chmod +x bin/evl
+ln -s "$PWD/bin/evl" ~/.local/bin/evl
 ```
 
-Check that `~/.local/bin` is on your `PATH` (`echo $PATH`). Because `evl` is a link, edits to `evl.py` take effect immediately.
+Check that `~/.local/bin` is on your `PATH` (`echo $PATH`). Because `evl` is a link, edits to the code take effect immediately. You can also run EVL without the link as `python3 -m evl ...` from the project folder.
+
+### Code layout
+
+| File | Contents |
+|------|----------|
+| `bin/evl` | Launcher, the file the `evl` command links to |
+| `evl/cli.py` | Command line: one-line, file and multiline modes |
+| `evl/syntax.py` | Rewrites EVL source before parsing: plotstyle blocks, `f(x) = ...`, `[a:b]` ranges, `^`, `show` |
+| `evl/evaluator.py` | The safe evaluator: statements, operators, comparisons, function calls |
+| `evl/names.py` | Built-in operators, constants, functions and base conversions |
+| `evl/values.py` | Lists, plots, plot styles and functions, ranges, printing answers |
+| `evl/calculus.py` | `integral`, `derivative`, `limit` |
+| `evl/plotting.py` | `plotstyle`, `plot`, `show`, and keeping plot windows responsive |
 
 ## Usage
 
